@@ -169,7 +169,8 @@ wickr_transport_packet_t *wickr_transport_packet_create_from_buffer(wickr_buffer
     uint8_t start_pos = sizeof(uint64_t) + sizeof(uint8_t);
     size_t mac_size = mac_buffer == NULL ? 0 : mac_buffer->length;
     
-    wickr_buffer_t *body_buffer = wickr_buffer_copy_section(type_buffer, start_pos, buffer->length - mac_size);
+    wickr_buffer_t *body_buffer = wickr_buffer_copy_section(buffer, start_pos,
+                                                            buffer->length - mac_size - start_pos);
     
     if (!body_buffer) {
         wickr_buffer_destroy(&mac_buffer);
@@ -370,7 +371,7 @@ static Wickr__Proto__Handshake *__wickr_transport_ctx_handshake_packet_unpack(wi
         return NULL;
     }
     
-    Wickr__Proto__Handshake *handshake_data = wickr__proto__handshake__unpack(NULL, packet->body->bytes, packet->body->length);
+    Wickr__Proto__Handshake *handshake_data = wickr__proto__handshake__unpack(NULL, packet->body->length, packet->body->bytes);
     
     if (!handshake_data) {
         return NULL;
@@ -387,15 +388,21 @@ static Wickr__Proto__Handshake *__wickr_transport_ctx_handshake_packet_unpack(wi
 }
 
 static wickr_transport_packet_t *__wickr_transport_ctx_handshake_generate_tx_key_exchange(wickr_transport_ctx_t *ctx,
-                                                                  Wickr__Proto__Handshake__PayloadCase phase,
-                                                                  wickr_stream_key_t *tx_key,
-                                                                  uint8_t version)
+                                                                                          Wickr__Proto__Handshake__PayloadCase phase,
+                                                                                          wickr_stream_key_t *tx_key,
+                                                                                          wickr_ec_key_t *seed_key,
+                                                                                          uint8_t version)
 {
     if (!ctx ||
         !tx_key ||
         version != CURRENT_HANDSHAKE_VERSION ||
-        phase == WICKR__PROTO__HANDSHAKE__PAYLOAD_SEED)
+        phase == WICKR__PROTO__HANDSHAKE__PAYLOAD_SEED ||
+        phase == WICKR__PROTO__HANDSHAKE__PAYLOAD__NOT_SET)
     {
+        return NULL;
+    }
+    
+    if (phase == WICKR__PROTO__HANDSHAKE__PAYLOAD_RESPONSE && !seed_key) {
         return NULL;
     }
     
@@ -447,10 +454,20 @@ static wickr_transport_packet_t *__wickr_transport_ctx_handshake_generate_tx_key
     response.key_exchange = &key_exchange_p;
     response.drop = false;
     
+    if (phase == WICKR__PROTO__HANDSHAKE__PAYLOAD_RESPONSE) {
+        
+        Wickr__proto
+        
+        response.response_key->has_pubkey = true;
+        response.response_key->pubkey.data = seed_key->pub_data->bytes;
+        response.response_key->pubkey.len = seed_key->pub_data->length;
+    }
+    
     Wickr__Proto__Handshake return_handshake = WICKR__PROTO__HANDSHAKE__INIT;
     return_handshake.payload_case = phase;
     return_handshake.response = &response;
     return_handshake.version = version;
+    
     
     wickr_transport_packet_t *packet = __wickr_transport_ctx_handshake_packet_create(ctx, &return_handshake);
     wickr_ec_key_destroy(&packet_exchange_key);
@@ -503,6 +520,32 @@ static void __wickr_transport_ctx_update_rx_stream(wickr_transport_ctx_t *ctx, w
     ctx->rx_stream = rx_stream;
 }
 
+static bool __wickr_transport_ctx_set_handshake_key(wickr_transport_ctx_t *ctx, wickr_ec_key_t *handshake_key)
+{
+    if (!ctx || !handshake_key) {
+        return false;
+    }
+    
+    wickr_ec_key_t *copy_key = wickr_ec_key_copy(handshake_key);
+    
+    if (!copy_key) {
+        return false;
+    }
+    
+    wickr_ephemeral_keypair_t *ephemeral_key = wickr_ephemeral_keypair_create(0, copy_key, NULL);
+    
+    if (!ephemeral_key) {
+        return false;
+    }
+    
+    if (!wickr_node_rotate_keypair(ctx->local_identity, ephemeral_key, false)) {
+        wickr_ephemeral_keypair_destroy(&ephemeral_key);
+        return false;
+    }
+    
+    return true;
+}
+
 static wickr_transport_packet_t *__wickr_transport_ctx_handshake_respond(wickr_transport_ctx_t *ctx, ProtobufCBinaryData pubkey_data, uint8_t version)
 {
     if (!ctx ) {
@@ -523,12 +566,29 @@ static wickr_transport_packet_t *__wickr_transport_ctx_handshake_respond(wickr_t
     
     Wickr__Proto__Handshake__PayloadCase phase = ctx->status == TRANSPORT_STATUS_NONE ? WICKR__PROTO__HANDSHAKE__PAYLOAD_RESPONSE : WICKR__PROTO__HANDSHAKE__PAYLOAD_FINISH;
     
+    wickr_ec_key_t *key = NULL;
+
+    if (phase == WICKR__PROTO__HANDSHAKE__PAYLOAD_RESPONSE) {
+        key = ctx->engine.wickr_crypto_engine_ec_rand_key(ctx->engine.default_curve);
+        
+        if (!key) {
+            wickr_stream_key_destroy(&tx_key);
+            return NULL;
+        }
+        
+        if (!__wickr_transport_ctx_set_handshake_key(ctx, key)) {
+            wickr_stream_key_destroy(&tx_key);
+            return NULL;
+        }
+    }
     
     wickr_transport_packet_t *packet = __wickr_transport_ctx_handshake_generate_tx_key_exchange(ctx,
                                                                         phase,
                                                                         tx_key,
+                                                                        key,
                                                                         version);
     
+    wickr_ec_key_destroy(&key);
     wickr_ephemeral_keypair_destroy(&ctx->remote_identity->ephemeral_keypair);
     
     if (!packet) {
@@ -812,16 +872,10 @@ void wickr_transport_ctx_start(wickr_transport_ctx_t *ctx)
         return;
     }
     
-    wickr_ephemeral_keypair_t *ephemeral_key = wickr_ephemeral_keypair_create(0, handshake_key, NULL);
+    bool result = __wickr_transport_ctx_set_handshake_key(ctx, handshake_key);
+    wickr_ec_key_destroy(&handshake_key);
     
-    if (!ephemeral_key) {
-        wickr_ec_key_destroy(&handshake_key);
-        __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
-        return;
-    }
-    
-    if (!wickr_node_rotate_keypair(ctx->local_identity, ephemeral_key, false)) {
-        wickr_ephemeral_keypair_destroy(&ephemeral_key);
+    if (!result) {
         __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
         return;
     }
@@ -834,9 +888,9 @@ void wickr_transport_ctx_start(wickr_transport_ctx_t *ctx)
         return;
     }
     
-    ctx->callbacks.tx(ctx, serialized_packet);
-    
     __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_SEEDED);
+    
+    ctx->callbacks.tx(ctx, serialized_packet);
 }
 
 void wickr_transport_ctx_process_tx_buffer(wickr_transport_ctx_t *ctx, wickr_buffer_t *buffer)
@@ -880,7 +934,7 @@ void wickr_transport_ctx_process_rx_buffer(wickr_transport_ctx_t *ctx, wickr_buf
         return;
     }
     
-    if (!__wickr_transport_ctx_verify_mac(ctx, NULL, buffer)) {
+    if (!__wickr_transport_ctx_verify_mac(ctx, packet, buffer)) {
         __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
         return;
     }
