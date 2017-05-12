@@ -29,7 +29,7 @@ int main(int argc, char *argv[])
     }
     
     CSpecOutputStruct* output = CI_MODE ? CSpec_NewOutputUnit() : CSpec_NewOutputVerbose();
-    /*
+    
     CSpec_Run(DESCRIPTION(wickr_buffer_tests), output);
     CSpec_Run(DESCRIPTION(node_tests), output);
     CSpec_Run(DESCRIPTION(wickr_ctx_generate), output );
@@ -66,13 +66,10 @@ int main(int argc, char *argv[])
     CSpec_Run(DESCRIPTION(wickr_stream_key), output);
     CSpec_Run(DESCRIPTION(wickr_stream_cipher), output);
     CSpec_Run(DESCRIPTION(wickr_stream_iv), output);
-    */
     CSpec_Run(DESCRIPTION(wickr_transport_ctx), output);
-    
-    /*
     CSpec_Run(DESCRIPTION(wickr_perform_kdf), output);
     CSpec_Run(DESCRIPTION(wickr_crypto_engine_kdf), output);
-     */
+     
     
     return output->failed;
 }
