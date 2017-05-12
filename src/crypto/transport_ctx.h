@@ -43,7 +43,7 @@ struct wickr_transport_callbacks {
 
 typedef struct wickr_transport_callbacks wickr_transport_callbacks_t;
 
-wickr_transport_ctx_t *wickr_transport_ctx_create(const wickr_crypto_engine_t engine, wickr_node_t *local_identity, wickr_node_t *remote_identity, wickr_transport_callbacks_t callbacks);
+wickr_transport_ctx_t *wickr_transport_ctx_create(const wickr_crypto_engine_t engine, wickr_node_t *local_identity, wickr_node_t *remote_identity, uint32_t evo_count, wickr_transport_callbacks_t callbacks);
 
 wickr_transport_ctx_t *wickr_transport_ctx_copy(wickr_transport_ctx_t *stream);
 void wickr_transport_ctx_destroy(wickr_transport_ctx_t **ctx);

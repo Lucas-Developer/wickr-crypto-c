@@ -66,7 +66,7 @@ int main(int argc, char *argv[])
     CSpec_Run(DESCRIPTION(wickr_stream_key), output);
     CSpec_Run(DESCRIPTION(wickr_stream_cipher), output);
     CSpec_Run(DESCRIPTION(wickr_stream_iv), output);
-     */
+    */
     CSpec_Run(DESCRIPTION(wickr_transport_ctx), output);
     
     /*

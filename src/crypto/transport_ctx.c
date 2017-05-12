@@ -12,30 +12,8 @@
 #include "protobuf_util.h"
 #include "stream_cipher.h"
 #include "protocol.h"
+#include "transport_priv.h"
 
-struct wickr_transport_ctx {
-    wickr_crypto_engine_t engine;
-    wickr_node_t *local_identity;
-    wickr_node_t *remote_identity;
-    wickr_stream_ctx_t *rx_stream;
-    wickr_stream_ctx_t *tx_stream;
-    wickr_transport_status status;
-    wickr_transport_callbacks_t callbacks;
-};
-
-#define CURRENT_HANDSHAKE_VERSION 1
-
-typedef enum { WICKR_HANDSHAKE_PHASE_INIT, WICKR_HANDSHAKE_PHASE_RESPONSE, WICKR_HANDSHAKE_PHASE_FINALIZE } wickr_handshake_phase;
-typedef enum { PAYLOAD_TYPE_HANDSHAKE, PAYLOAD_TYPE_CIPHERTEXT } wickr_transport_payload_type;
-
-struct wickr_transport_packet {
-    uint64_t seq_num;
-    wickr_transport_payload_type body_type;
-    wickr_buffer_t *body;
-    wickr_buffer_t *mac;
-};
-
-typedef struct wickr_transport_packet wickr_transport_packet_t;
 
 static uint8_t __wickr_handshake_version_to_key_exchange(uint8_t handshake_version)
 {
@@ -46,149 +24,6 @@ static uint8_t __wickr_handshake_version_to_key_exchange(uint8_t handshake_versi
         default:
             return 0;
     }
-}
-
-wickr_transport_packet_t *wickr_transport_packet_create(uint64_t seq_num, wickr_transport_payload_type body_type, wickr_buffer_t *body, wickr_buffer_t *mac)
-{
-    if (!body) {
-        return NULL;
-    }
-    
-    wickr_transport_packet_t *transport_pkt = wickr_alloc_zero(sizeof(wickr_transport_packet_t));
-    
-    if (!transport_pkt) {
-        return NULL;
-    }
-    
-    transport_pkt->seq_num = seq_num;
-    transport_pkt->body_type = body_type;
-    transport_pkt->body = body;
-    transport_pkt->mac = mac;
-    
-    return transport_pkt;
-}
-
-wickr_transport_packet_t *wickr_transport_packet_copy(wickr_transport_packet_t *pkt)
-{
-    if (!pkt) {
-        return NULL;
-    }
-    
-    wickr_buffer_t *body_copy = wickr_buffer_copy(pkt->body);
-    
-    if (!body_copy) {
-        return NULL;
-    }
-    
-    wickr_buffer_t *mac_copy = wickr_buffer_copy(pkt->mac);
-    
-    if (pkt->mac && !mac_copy) {
-        wickr_buffer_destroy(&body_copy);
-        return NULL;
-    }
-    
-    wickr_transport_packet_t *copy = wickr_transport_packet_create(pkt->seq_num, pkt->body_type, body_copy, mac_copy);
-    
-    if (!copy) {
-        wickr_buffer_destroy(&body_copy);
-        wickr_buffer_destroy(&mac_copy);
-        return NULL;
-    }
-    
-    return copy;
-}
-
-static wickr_buffer_t *__wickr_transport_packet_make_meta_buffer(wickr_transport_packet_t *pkt)
-{
-    if (!pkt) {
-        return NULL;
-    }
-    
-    wickr_buffer_t seq_buffer;
-    seq_buffer.length = sizeof(uint64_t);
-    seq_buffer.bytes = (uint8_t *)&pkt->seq_num;
-    
-    wickr_buffer_t type_buffer;
-    type_buffer.length = sizeof(uint8_t);
-    type_buffer.bytes = (uint8_t *)&pkt->body_type;
-    
-    return wickr_buffer_concat(&seq_buffer, &type_buffer);
-}
-
-wickr_buffer_t *wickr_transport_packet_serialize(wickr_transport_packet_t *pkt)
-{
-    if (!pkt) {
-        return NULL;
-    }
-    
-    wickr_buffer_t *meta_buffer = __wickr_transport_packet_make_meta_buffer(pkt);
-    
-    if (!meta_buffer) {
-        return NULL;
-    }
-    
-    wickr_buffer_t *components[] = { meta_buffer, pkt->body, pkt->mac };
-    wickr_buffer_t *return_buffer = wickr_buffer_concat_multi(components, BUFFER_ARRAY_LEN(components));
-    wickr_buffer_destroy(&meta_buffer);
-    
-    return return_buffer;
-}
-
-wickr_transport_packet_t *wickr_transport_packet_create_from_buffer(wickr_buffer_t *buffer, uint8_t signature_size)
-{
-    if (!buffer) {
-        return NULL;
-    }
-    
-    uint64_t seq_num = ((uint64_t *)buffer->bytes)[0];
-    uint8_t type_buffer = buffer->bytes[sizeof(uint64_t)];
-    
-    wickr_buffer_t *mac_buffer = NULL;
-    
-    switch (type_buffer) {
-        case PAYLOAD_TYPE_HANDSHAKE:
-        {
-            mac_buffer = wickr_buffer_copy_section(buffer, buffer->length - signature_size, signature_size);
-            
-            if (!mac_buffer) {
-                return NULL;
-            }
-        }
-            break;
-        case PAYLOAD_TYPE_CIPHERTEXT:
-            /* Currently we only support authenticated ciphers for transports, so the mac will be NULL
-             since the mac is included in the body as part of the wickr_cipher_result serialization. The
-             GCM encryption for example will include the seq_num and type_buffer fields as AAD data so the GCM
-             tag in the cipher_result will authenticate the entire packet. Future versions of the library may support
-             CTR + HMAC, or something similar, which will create the need for placing the HMAC in the mac field */
-            break;
-        default:
-            return NULL;
-    }
-    
-    uint8_t start_pos = sizeof(uint64_t) + sizeof(uint8_t);
-    size_t mac_size = mac_buffer == NULL ? 0 : mac_buffer->length;
-    
-    wickr_buffer_t *body_buffer = wickr_buffer_copy_section(buffer, start_pos,
-                                                            buffer->length - mac_size - start_pos);
-    
-    if (!body_buffer) {
-        wickr_buffer_destroy(&mac_buffer);
-        return NULL;
-    }
-    
-    wickr_transport_packet_t *pkt = wickr_transport_packet_create(seq_num,
-                                                                  (wickr_transport_payload_type)type_buffer,
-                                                                  body_buffer,
-                                                                  mac_buffer);
-    
-    if (!pkt) {
-        wickr_buffer_destroy(&mac_buffer);
-        wickr_buffer_destroy(&body_buffer);
-        return NULL;
-    }
-    
-    return pkt;
 }
 
 static bool __wickr_transport_ctx_create_mac(wickr_transport_ctx_t *ctx, wickr_transport_packet_t *packet)
@@ -224,52 +59,31 @@ static bool __wickr_transport_ctx_create_mac(wickr_transport_ctx_t *ctx, wickr_t
 
 static bool __wickr_transport_ctx_verify_mac(wickr_transport_ctx_t *ctx, wickr_transport_packet_t *packet, wickr_buffer_t *packet_buffer)
 {
-    if (!ctx || !packet) {
+    if (!ctx || !packet || !packet->mac) {
         return false;
     }
     
-    switch (packet->body_type) {
-        case PAYLOAD_TYPE_HANDSHAKE:
-        {
-            wickr_ecdsa_result_t *signature = wickr_ecdsa_result_create_from_buffer(packet->mac);
-            
-            if (!signature) {
-                return NULL;
-            }
-            
-            /* Create a temp buffer with a length that puts it's end before the start of the mac */
-            wickr_buffer_t validation_buffer;
-            validation_buffer.bytes = packet_buffer->bytes;
-            validation_buffer.length = packet_buffer->length - packet->mac->length;
-            
-            bool return_val = ctx->engine.wickr_crypto_engine_ec_verify(signature, ctx->remote_identity->id_chain->node->sig_key, &validation_buffer);
-            
-            wickr_ecdsa_result_destroy(&signature);
-            
-            return return_val;
-        }
-            break;
-        case PAYLOAD_TYPE_CIPHERTEXT:
-        {
-            /* Currently only authenticated ciphers are supported. The decrypt operation will authenticate the packet */
-            return true;
-        }
-            break;
-        default:
-            return false;
-    }
-}
-
-void wickr_transport_packet_destroy(wickr_transport_packet_t **pkt)
-{
-    if (!pkt || !*pkt) {
-        return;
+    if (packet_buffer->length <= packet->mac->length) {
+        return false;
     }
     
-    wickr_buffer_destroy(&(*pkt)->body);
-    wickr_buffer_destroy(&(*pkt)->mac);
-    wickr_free(*pkt);
-    *pkt = NULL;
+    wickr_ecdsa_result_t *signature = wickr_ecdsa_result_create_from_buffer(packet->mac);
+    
+    if (!signature) {
+        return false;
+    }
+    
+    /* Create a temp buffer with a length that puts it's end before the start of the mac */
+    wickr_buffer_t validation_buffer;
+    validation_buffer.bytes = packet_buffer->bytes;
+    validation_buffer.length = packet_buffer->length - packet->mac->length;
+    
+    bool return_val = ctx->engine.wickr_crypto_engine_ec_verify(signature, ctx->remote_identity->id_chain->node->sig_key, &validation_buffer);
+    
+    wickr_ecdsa_result_destroy(&signature);
+    
+    return return_val;
+    
 }
 
 static void __wickr_transport_ctx_update_status(wickr_transport_ctx_t *ctx, wickr_transport_status status)
@@ -282,9 +96,13 @@ static void __wickr_transport_ctx_update_status(wickr_transport_ctx_t *ctx, wick
     ctx->callbacks.on_state(ctx, status);
 }
 
-wickr_transport_ctx_t *wickr_transport_ctx_create(const wickr_crypto_engine_t engine, wickr_node_t *local_identity, wickr_node_t *remote_identity, wickr_transport_callbacks_t callbacks)
+wickr_transport_ctx_t *wickr_transport_ctx_create(const wickr_crypto_engine_t engine, wickr_node_t *local_identity, wickr_node_t *remote_identity, uint32_t evo_count, wickr_transport_callbacks_t callbacks)
 {
     if (!local_identity || !remote_identity) {
+        return NULL;
+    }
+    
+    if (evo_count != 0 && (evo_count > PACKET_PER_EVO_MAX || evo_count < PACKET_PER_EVO_MIN)) {
         return NULL;
     }
     
@@ -299,14 +117,66 @@ wickr_transport_ctx_t *wickr_transport_ctx_create(const wickr_crypto_engine_t en
     ctx->local_identity = local_identity;
     ctx->remote_identity = remote_identity;
     ctx->callbacks = callbacks;
-    
+    ctx->evo_count = evo_count == 0 ? PACKET_PER_EVO_DEFAULT : evo_count;
     return ctx;
 }
 
-wickr_transport_ctx_t *wickr_transport_ctx_copy(wickr_transport_ctx_t *stream)
+wickr_transport_ctx_t *wickr_transport_ctx_copy(wickr_transport_ctx_t *ctx)
 {
-    //TODO: Implement proper copy
-    return NULL;
+    if (!ctx) {
+        return NULL;
+    }
+    
+    wickr_node_t *local_copy = wickr_node_copy(ctx->local_identity);
+    
+    if (!local_copy) {
+        return NULL;
+    }
+    
+    wickr_node_t *remote_copy = wickr_node_copy(ctx->remote_identity);
+    
+    if (!remote_copy) {
+        wickr_node_destroy(&local_copy);
+        return NULL;
+    }
+    
+    wickr_stream_ctx_t *tx_copy = wickr_stream_ctx_copy(ctx->tx_stream);
+    
+    if (!tx_copy && ctx->tx_stream) {
+        wickr_node_destroy(&local_copy);
+        wickr_node_destroy(&remote_copy);
+        return NULL;
+    }
+    
+    wickr_stream_ctx_t *rx_copy = wickr_stream_ctx_copy(ctx->rx_stream);
+    
+    if (!rx_copy && ctx->rx_stream) {
+        wickr_node_destroy(&local_copy);
+        wickr_node_destroy(&remote_copy);
+        wickr_stream_ctx_destroy(&tx_copy);
+        return NULL;
+    }
+    
+    wickr_transport_ctx_t *copy = wickr_alloc_zero(sizeof(wickr_transport_ctx_t));
+    
+    if (!copy) {
+        wickr_node_destroy(&local_copy);
+        wickr_node_destroy(&remote_copy);
+        wickr_stream_ctx_destroy(&tx_copy);
+        wickr_stream_ctx_destroy(&rx_copy);
+        return NULL;
+    }
+    
+    copy->engine = ctx->engine;
+    copy->local_identity = local_copy;
+    copy->remote_identity = remote_copy;
+    copy->tx_stream = tx_copy;
+    copy->rx_stream = rx_copy;
+    copy->status = ctx->status;
+    copy->callbacks = ctx->callbacks;
+    copy->evo_count = ctx->evo_count;
+    
+    return copy;
 }
 
 void wickr_transport_ctx_destroy(wickr_transport_ctx_t **ctx)
@@ -454,13 +324,13 @@ static wickr_transport_packet_t *__wickr_transport_ctx_handshake_generate_tx_key
     response.key_exchange = &key_exchange_p;
     response.drop = false;
     
-    if (phase == WICKR__PROTO__HANDSHAKE__PAYLOAD_RESPONSE) {
-        
-        Wickr__proto
-        
-        response.response_key->has_pubkey = true;
-        response.response_key->pubkey.data = seed_key->pub_data->bytes;
-        response.response_key->pubkey.len = seed_key->pub_data->length;
+    Wickr__Proto__Handshake__Seed seed = WICKR__PROTO__HANDSHAKE__SEED__INIT;
+    
+    if (seed_key) {
+        seed.has_pubkey = true;
+        seed.pubkey.data = seed_key->pub_data->bytes;
+        seed.pubkey.len = seed_key->pub_data->length;
+        response.response_key = &seed;
     }
     
     Wickr__Proto__Handshake return_handshake = WICKR__PROTO__HANDSHAKE__INIT;
@@ -556,8 +426,7 @@ static wickr_transport_packet_t *__wickr_transport_ctx_handshake_respond(wickr_t
         return NULL;
     }
     
-    //TODO: Figure out a way to choose the evolution count and make it controlled by the person creating the transport
-    wickr_stream_key_t *tx_key = wickr_stream_key_create_rand(ctx->engine, ctx->engine.default_cipher, 512);
+    wickr_stream_key_t *tx_key = wickr_stream_key_create_rand(ctx->engine, ctx->engine.default_cipher, ctx->evo_count);
     
     if (!tx_key) {
         wickr_ephemeral_keypair_destroy(&ctx->remote_identity->ephemeral_keypair);
@@ -611,13 +480,13 @@ static wickr_transport_packet_t *__wickr_transport_ctx_handshake_respond(wickr_t
 
 }
 
-static wickr_transport_packet_t *__wickr_transport_ctx_handshake_seed_respond(wickr_transport_ctx_t *stream, wickr_transport_packet_t *handshake)
+static wickr_transport_packet_t *__wickr_transport_ctx_handshake_seed_respond(wickr_transport_ctx_t *ctx, wickr_transport_packet_t *handshake)
 {
-    if (!stream || !handshake || stream->status == TRANSPORT_STATUS_ERROR) {
+    if (!ctx || !handshake) {
         return NULL;
     }
     
-    Wickr__Proto__Handshake *handshake_data = __wickr_transport_ctx_handshake_packet_unpack(stream, handshake, WICKR__PROTO__HANDSHAKE__PAYLOAD_SEED);
+    Wickr__Proto__Handshake *handshake_data = __wickr_transport_ctx_handshake_packet_unpack(ctx, handshake, WICKR__PROTO__HANDSHAKE__PAYLOAD_SEED);
     
     if (!handshake_data) {
         return NULL;
@@ -628,17 +497,17 @@ static wickr_transport_packet_t *__wickr_transport_ctx_handshake_seed_respond(wi
         return NULL;
     }
     
-    wickr_transport_packet_t *return_packet = __wickr_transport_ctx_handshake_respond(stream, handshake_data->seed->pubkey, handshake_data->version);
+    wickr_transport_packet_t *return_packet = __wickr_transport_ctx_handshake_respond(ctx, handshake_data->seed->pubkey, handshake_data->version);
     wickr__proto__handshake__free_unpacked(handshake_data, NULL);
     
     return return_packet;
 }
 
-static wickr_stream_key_t *__wickr_transport_ctx_handshake_decode_rx_key(wickr_transport_ctx_t *stream,
+static wickr_stream_key_t *__wickr_transport_ctx_handshake_decode_rx_key(wickr_transport_ctx_t *ctx,
                                                                   Wickr__Proto__Handshake__KeyExchange *return_exchange,
                                                                   uint8_t version)
 {
-    if (!stream || !return_exchange || version != CURRENT_HANDSHAKE_VERSION) {
+    if (!ctx || !return_exchange || version != CURRENT_HANDSHAKE_VERSION) {
         return NULL;
     }
     
@@ -654,18 +523,18 @@ static wickr_stream_key_t *__wickr_transport_ctx_handshake_decode_rx_key(wickr_t
     
     wickr_key_exchange_t exchange;
     exchange.ephemeral_key_id = 0;
-    exchange.node_id = stream->local_identity->id_chain->node->identifier;
+    exchange.node_id = ctx->local_identity->id_chain->node->identifier;
     exchange.exchange_data = &key_exchange_buffer;
     
-    wickr_ec_key_t *ec_key = stream->engine.wickr_crypto_engine_ec_key_import(&exchange_key_buffer, false);
+    wickr_ec_key_t *ec_key = ctx->engine.wickr_crypto_engine_ec_key_import(&exchange_key_buffer, false);
     
     if (!ec_key) {
         return NULL;
     }
     
-    wickr_buffer_t *rx_key_buffer = wickr_key_exchange_derive_data(&stream->engine, stream->remote_identity->id_chain, stream->local_identity, ec_key, &exchange, key_ex_version);
+    wickr_buffer_t *rx_key_buffer = wickr_key_exchange_derive_data(&ctx->engine, ctx->remote_identity->id_chain, ctx->local_identity, ec_key, &exchange, key_ex_version);
     
-    wickr_ephemeral_keypair_destroy(&stream->local_identity->ephemeral_keypair);
+    wickr_ephemeral_keypair_destroy(&ctx->local_identity->ephemeral_keypair);
     wickr_ec_key_destroy(&ec_key);
     
     if (!rx_key_buffer) {
@@ -678,13 +547,13 @@ static wickr_stream_key_t *__wickr_transport_ctx_handshake_decode_rx_key(wickr_t
     return rx_key;
 }
 
-static Wickr__Proto__Handshake *__wickr_transport_ctx_handshake_process_response(wickr_transport_ctx_t *stream, wickr_transport_packet_t *return_handshake)
+static Wickr__Proto__Handshake *__wickr_transport_ctx_handshake_process_response(wickr_transport_ctx_t *ctx, wickr_transport_packet_t *return_handshake)
 {
-    if (!stream || !return_handshake) {
+    if (!ctx || !return_handshake) {
         return NULL;
     }
     
-    switch (stream->status) {
+    switch (ctx->status) {
         case TRANSPORT_STATUS_NONE:
         case TRANSPORT_STATUS_ERROR:
         case TRANSPORT_STATUS_ACTIVE:
@@ -693,9 +562,9 @@ static Wickr__Proto__Handshake *__wickr_transport_ctx_handshake_process_response
             break;
     }
     
-    Wickr__Proto__Handshake__PayloadCase phase = stream->status == TRANSPORT_STATUS_SEEDED ? WICKR__PROTO__HANDSHAKE__PAYLOAD_RESPONSE : WICKR__PROTO__HANDSHAKE__PAYLOAD_FINISH;
+    Wickr__Proto__Handshake__PayloadCase phase = ctx->status == TRANSPORT_STATUS_SEEDED ? WICKR__PROTO__HANDSHAKE__PAYLOAD_RESPONSE : WICKR__PROTO__HANDSHAKE__PAYLOAD_FINISH;
     
-    Wickr__Proto__Handshake *handshake_data = __wickr_transport_ctx_handshake_packet_unpack(stream,
+    Wickr__Proto__Handshake *handshake_data = __wickr_transport_ctx_handshake_packet_unpack(ctx,
                                                                               return_handshake,
                                                                               phase);
     
@@ -717,28 +586,28 @@ static Wickr__Proto__Handshake *__wickr_transport_ctx_handshake_process_response
             return NULL;
     }
    
-    wickr_stream_key_t *rx_key = __wickr_transport_ctx_handshake_decode_rx_key(stream, key_exchange, handshake_data->version);
+    wickr_stream_key_t *rx_key = __wickr_transport_ctx_handshake_decode_rx_key(ctx, key_exchange, handshake_data->version);
     
     if (!rx_key) {
         wickr__proto__handshake__free_unpacked(handshake_data, NULL);
         return NULL;
     }
     
-    wickr_stream_ctx_t *rx_stream = wickr_stream_ctx_create(stream->engine, rx_key, STREAM_DIRECTION_DECODE);
+    wickr_stream_ctx_t *rx_stream = wickr_stream_ctx_create(ctx->engine, rx_key, STREAM_DIRECTION_DECODE);
     
     if (!rx_stream) {
         wickr_stream_key_destroy(&rx_key);
         return NULL;
     }
     
-    __wickr_transport_ctx_update_rx_stream(stream, rx_stream);
+    __wickr_transport_ctx_update_rx_stream(ctx, rx_stream);
     
     return handshake_data;
 }
 
 static wickr_transport_packet_t *__wickr_transport_ctx_handshake_process_return(wickr_transport_ctx_t *ctx, wickr_transport_packet_t *return_handshake)
 {
-    if (!ctx || !return_handshake || ctx->status == TRANSPORT_STATUS_ERROR) {
+    if (!ctx || !return_handshake) {
         return NULL;
     }
     
@@ -756,14 +625,13 @@ static wickr_transport_packet_t *__wickr_transport_ctx_handshake_process_return(
 
 static bool __wickr_transport_ctx_handshake_finish(wickr_transport_ctx_t *ctx, wickr_transport_packet_t *finish_handshake)
 {
-    if (!ctx || !finish_handshake || ctx->status == TRANSPORT_STATUS_ERROR) {
+    if (!ctx || !finish_handshake) {
         return NULL;
     }
     
     Wickr__Proto__Handshake *handshake_data = __wickr_transport_ctx_handshake_process_response(ctx, finish_handshake);
     
     if (!handshake_data) {
-        wickr__proto__handshake__free_unpacked(handshake_data, NULL);
         return false;
     }
     
@@ -784,7 +652,7 @@ static wickr_buffer_t *__wickr_transport_ctx_decode_pkt(wickr_transport_ctx_t *c
         return NULL;
     }
     
-    wickr_buffer_t *aad_buffer = __wickr_transport_packet_make_meta_buffer(pkt);
+    wickr_buffer_t *aad_buffer = wickr_transport_packet_make_meta_buffer(pkt);
     
     if (!aad_buffer) {
         wickr_cipher_result_destroy(&cipher_result);
@@ -813,7 +681,7 @@ static wickr_transport_packet_t *__wickr_transport_ctx_encode_pkt(wickr_transpor
         return NULL;
     }
     
-    wickr_buffer_t *aad_buffer = __wickr_transport_packet_make_meta_buffer(pkt);
+    wickr_buffer_t *aad_buffer = wickr_transport_packet_make_meta_buffer(pkt);
     
     if (!aad_buffer) {
         wickr_transport_packet_destroy(&pkt);
@@ -843,7 +711,7 @@ static wickr_transport_packet_t *__wickr_transport_ctx_encode_pkt(wickr_transpor
 
 void wickr_transport_ctx_start(wickr_transport_ctx_t *ctx)
 {
-    if (!ctx) {
+    if (!ctx || ctx->status == TRANSPORT_STATUS_ERROR) {
         return;
     }
     
@@ -895,7 +763,8 @@ void wickr_transport_ctx_start(wickr_transport_ctx_t *ctx)
 
 void wickr_transport_ctx_process_tx_buffer(wickr_transport_ctx_t *ctx, wickr_buffer_t *buffer)
 {
-    if (!ctx || !buffer) {
+    if (!ctx || !buffer || ctx->status == TRANSPORT_STATUS_ERROR) {
+        __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
         return;
     }
     
@@ -924,17 +793,31 @@ void wickr_transport_ctx_process_tx_buffer(wickr_transport_ctx_t *ctx, wickr_buf
 
 void wickr_transport_ctx_process_rx_buffer(wickr_transport_ctx_t *ctx, wickr_buffer_t *buffer)
 {
-    if (!ctx || !buffer) {
+    if (!ctx || !buffer || ctx->status == TRANSPORT_STATUS_ERROR) {
+        __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
         return;
     }
     
     wickr_transport_packet_t *packet = wickr_transport_packet_create_from_buffer(buffer, ctx->remote_identity->id_chain->node->sig_key->curve.signature_size);
     
     if (!packet) {
+        __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
         return;
     }
     
-    if (!__wickr_transport_ctx_verify_mac(ctx, packet, buffer)) {
+    bool valid_mac = __wickr_transport_ctx_verify_mac(ctx, packet, buffer);
+    
+    /* The mac is not required in the condition that we are passed the handshake, the body type of the packet is ciphertext,
+       and the cipher of the rx stream is authenticated. In this scenario we rely on the cipher level authentication instead of an explicit mac
+     */
+    if (!valid_mac) {
+        if (ctx->status == TRANSPORT_STATUS_ACTIVE && packet->body_type == PAYLOAD_TYPE_CIPHERTEXT &&
+            ctx->rx_stream->key->cipher_key->cipher.is_authenticated) {
+            valid_mac = true;
+        }
+    }
+    
+    if (!valid_mac) {
         __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
         return;
     }
@@ -973,25 +856,39 @@ void wickr_transport_ctx_process_rx_buffer(wickr_transport_ctx_t *ctx, wickr_buf
             }
             break;
         case TRANSPORT_STATUS_ACTIVE:
-            return_buffer = __wickr_transport_ctx_decode_pkt(ctx, packet);
+            
+            if (packet->body_type == PAYLOAD_TYPE_HANDSHAKE) {
+                volley_packet = __wickr_transport_ctx_handshake_seed_respond(ctx, packet);
+                
+                if (!volley_packet) {
+                    __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
+                }
+                else {
+                    __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_TX_INIT);
+                }
+            }
+            else {
+                return_buffer = __wickr_transport_ctx_decode_pkt(ctx, packet);
+            }
+            
             break;
         default:
             break;
     }
-    
-    wickr_transport_packet_destroy(&packet);
     
     /* Make sure to adjust the rx_stream seq num to compensate for any control messages received */
     if (ctx->rx_stream && ctx->rx_stream->last_seq != packet->seq_num) {
         ctx->rx_stream->last_seq = packet->seq_num;
     }
     
+    wickr_transport_packet_destroy(&packet);
+    
     if (volley_packet) {
         wickr_buffer_t *packet_buffer = wickr_transport_packet_serialize(volley_packet);
+        wickr_transport_packet_destroy(&volley_packet);
         
         if (!packet_buffer) {
             __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
-            wickr_transport_packet_destroy(&volley_packet);
             return;
         }
         ctx->callbacks.tx(ctx, packet_buffer);
