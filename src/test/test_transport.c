@@ -614,8 +614,18 @@ DESCRIBE(wickr_transport_ctx, "wickr_transport_ctx")
         SHOULD_EQUAL(last_tx_alice->bytes[sizeof(uint64_t)], PAYLOAD_TYPE_HANDSHAKE);
         last_tx_alice->bytes[sizeof(uint64_t)] = (uint8_t)PAYLOAD_TYPE_CIPHERTEXT;
         
-        //TODO: Expose signature function so that we can get a valid signature with the incorrect type
+        /* Swap signature so the packet is valid */
+        wickr_transport_packet_t *pkt = wickr_transport_packet_create_from_buffer(last_tx_alice, alice_transport->local_identity->id_chain->node->sig_key->curve.signature_size);
+        SHOULD_NOT_BE_NULL(pkt);
         
+        SHOULD_BE_TRUE(wickr_transport_packet_sign(pkt, &engine, alice_transport->local_identity->id_chain->node));
+        
+        wickr_buffer_t *new_buffer = wickr_transport_packet_serialize(pkt);
+        SHOULD_NOT_BE_NULL(new_buffer);
+        
+        wickr_buffer_destroy(&last_tx_alice);
+        last_tx_alice = new_buffer;
+                
         
         wickr_transport_ctx_process_rx_buffer(bob_transport, last_tx_alice);
         
@@ -694,6 +704,48 @@ DESCRIBE(wickr_transport_ctx, "wickr_transport_ctx")
     }
     END_IT
     
+    IT("can perform a key exchange at any time")
+    {
+        wickr_stream_ctx_t *old_alice_rx = wickr_stream_ctx_copy(alice_transport->rx_stream);
+        wickr_stream_ctx_t *old_alice_tx = wickr_stream_ctx_copy(alice_transport->tx_stream);
+        
+        wickr_stream_ctx_t *old_bob_rx = wickr_stream_ctx_copy(bob_transport->rx_stream);
+        wickr_stream_ctx_t *old_bob_tx = wickr_stream_ctx_copy(bob_transport->tx_stream);
+
+        wickr_transport_ctx_start(alice_transport);
+        
+        SHOULD_EQUAL(alice_transport->status, TRANSPORT_STATUS_ACTIVE);
+        SHOULD_EQUAL(bob_transport->status, TRANSPORT_STATUS_ACTIVE);
+
+        
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(old_alice_rx->key->cipher_key->key_data, alice_transport->rx_stream->key->cipher_key->key_data, NULL));
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(old_alice_tx->key->cipher_key->key_data, alice_transport->tx_stream->key->cipher_key->key_data, NULL));
+        
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(old_bob_rx->key->cipher_key->key_data, bob_transport->rx_stream->key->cipher_key->key_data, NULL));
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(old_bob_tx->key->cipher_key->key_data, bob_transport->tx_stream->key->cipher_key->key_data, NULL));
+        
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(old_alice_rx->key->evolution_key, alice_transport->rx_stream->key->evolution_key, NULL));
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(old_alice_tx->key->evolution_key, alice_transport->tx_stream->key->evolution_key, NULL));
+        
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(old_bob_rx->key->evolution_key, bob_transport->rx_stream->key->evolution_key, NULL));
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(old_bob_tx->key->evolution_key, bob_transport->tx_stream->key->evolution_key, NULL));
+        
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(old_alice_tx->iv_factory->seed, alice_transport->tx_stream->iv_factory->seed, NULL));
+        
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(old_bob_tx->iv_factory->seed, bob_transport->tx_stream->iv_factory->seed, NULL));
+        
+        SHOULD_EQUAL(alice_transport->rx_stream->last_seq, old_alice_rx->last_seq + 1);
+        SHOULD_EQUAL(alice_transport->tx_stream->last_seq, old_alice_tx->last_seq + 2);
+        SHOULD_EQUAL(bob_transport->rx_stream->last_seq, old_bob_rx->last_seq + 2);
+        SHOULD_EQUAL(bob_transport->tx_stream->last_seq, old_bob_tx->last_seq + 1);
+
+        wickr_stream_ctx_destroy(&old_bob_rx);
+        wickr_stream_ctx_destroy(&old_bob_tx);
+        wickr_stream_ctx_destroy(&old_alice_rx);
+        wickr_stream_ctx_destroy(&old_alice_tx);
+    }
+    END_IT
+    
     IT("can be copied")
     {
         wickr_transport_ctx_t *copy = wickr_transport_ctx_copy(alice_transport);
@@ -709,12 +761,237 @@ DESCRIBE(wickr_transport_ctx, "wickr_transport_ctx")
     }
     END_IT
     
+    reset_alice_bob();
+    
+    IT("should enter a failure state when a corrupted packet is entered into the stream")
+    {
+        wickr_transport_ctx_start(alice_transport);
+        
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, alice_transport->status);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, bob_transport->status);
+        
+        wickr_buffer_t *test_bad_packet = engine.wickr_crypto_engine_crypto_random(32);
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, test_bad_packet);
+        
+        SHOULD_EQUAL(TRANSPORT_STATUS_ERROR, bob_transport->status);
+        
+        wickr_buffer_destroy(&test_bad_packet);
+    }
+    END_IT
+    
+    reset_alice_bob();
+    
+    IT("should enter a failure state if the packet is too small (1)")
+    {
+        wickr_transport_ctx_start(alice_transport);
+        
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, alice_transport->status);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, bob_transport->status);
+        
+        wickr_buffer_t *test_bad_packet = engine.wickr_crypto_engine_crypto_random(sizeof(uint64_t) / 2);
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, test_bad_packet);
+        
+        SHOULD_EQUAL(TRANSPORT_STATUS_ERROR, bob_transport->status);
+        
+        wickr_buffer_destroy(&test_bad_packet);
+    }
+    END_IT
+    
+    reset_alice_bob();
+    
+    IT("should enter a failure state if the packet is too small (2)")
+    {
+        wickr_transport_ctx_start(alice_transport);
+        
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, alice_transport->status);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, bob_transport->status);
+        
+        wickr_buffer_t *test_bad_packet = engine.wickr_crypto_engine_crypto_random(sizeof(uint64_t));
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, test_bad_packet);
+        
+        SHOULD_EQUAL(TRANSPORT_STATUS_ERROR, bob_transport->status);
+        
+        wickr_buffer_destroy(&test_bad_packet);
+    }
+    END_IT
+    
+    reset_alice_bob();
+    
+    IT("should enter a failure state when the body of packet is modified in transit")
+    {
+        wickr_transport_ctx_start(alice_transport);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, alice_transport->status);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, bob_transport->status);
+        
+        wickr_buffer_t *test_bad_packet = engine.wickr_crypto_engine_crypto_random(32);
+
+        wickr_transport_ctx_process_tx_buffer(alice_transport, test_bad_packet);
+        
+        if (last_tx_alice->bytes[last_tx_alice->length /2] != 0x0) {
+            last_tx_alice->bytes[last_tx_alice->length / 2] = 0x0;
+        }
+        else {
+            last_tx_alice->bytes[last_tx_alice->length / 2] = 0x1;
+        }
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, test_bad_packet);
+        
+        SHOULD_EQUAL(TRANSPORT_STATUS_ERROR, bob_transport->status);
+        
+        wickr_buffer_destroy(&test_bad_packet);
+    }
+    END_IT
+    
+    reset_alice_bob();
+    
+    IT("should enter a failure state if the sequence number of a packet is modified in transit")
+    {
+        wickr_transport_ctx_start(alice_transport);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, alice_transport->status);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, bob_transport->status);
+        
+        wickr_buffer_t *test_bad_packet = engine.wickr_crypto_engine_crypto_random(32);
+        
+        wickr_transport_ctx_process_tx_buffer(alice_transport, test_bad_packet);
+        
+        last_tx_alice->bytes[0] = 0x5;
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, test_bad_packet);
+        
+        SHOULD_EQUAL(TRANSPORT_STATUS_ERROR, bob_transport->status);
+        
+        wickr_buffer_destroy(&test_bad_packet);
+    }
+    END_IT
+    
+    reset_alice_bob();
+    
+    IT("should enter a failure state if a sequence number goes backwards")
+    {
+        wickr_transport_ctx_start(alice_transport);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, alice_transport->status);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, bob_transport->status);
+        
+        wickr_buffer_t *test_data_1 = engine.wickr_crypto_engine_crypto_random(32);
+        wickr_buffer_t *test_data_2 = engine.wickr_crypto_engine_crypto_random(32);
+
+        
+        wickr_transport_ctx_process_tx_buffer(alice_transport, test_data_1);
+
+        wickr_buffer_t *test_pkt_1 = wickr_buffer_copy(last_tx_alice);
+        
+        wickr_transport_ctx_process_tx_buffer(alice_transport, test_data_2);
+
+        wickr_buffer_t *test_pkt_2 = wickr_buffer_copy(last_tx_alice);
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, test_pkt_1);
+        
+        SHOULD_EQUAL(bob_transport->status, TRANSPORT_STATUS_ACTIVE);
+        SHOULD_BE_TRUE(wickr_buffer_is_equal(test_data_1, last_rx_bob, NULL));
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, test_pkt_2);
+        
+        SHOULD_EQUAL(bob_transport->status, TRANSPORT_STATUS_ACTIVE);
+        SHOULD_BE_TRUE(wickr_buffer_is_equal(test_data_2, last_rx_bob, NULL));
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, test_pkt_1);
+        
+        SHOULD_EQUAL(bob_transport->status, TRANSPORT_STATUS_ERROR);
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(test_data_1, last_rx_bob, NULL));
+        
+        wickr_buffer_destroy(&test_pkt_1);
+        wickr_buffer_destroy(&test_pkt_2);
+        wickr_buffer_destroy(&test_data_1);
+        wickr_buffer_destroy(&test_data_2);
+
+    }
+    END_IT
+    
+    reset_alice_bob();
+    
+    IT("should enter a failure state if there is a replay")
+    {
+        wickr_transport_ctx_start(alice_transport);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, alice_transport->status);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, bob_transport->status);
+        
+        wickr_buffer_t *test_data_1 = engine.wickr_crypto_engine_crypto_random(32);
+        
+        
+        wickr_transport_ctx_process_tx_buffer(alice_transport, test_data_1);
+        
+        wickr_buffer_t *test_pkt_1 = wickr_buffer_copy(last_tx_alice);
+        
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, test_pkt_1);
+        
+        SHOULD_EQUAL(bob_transport->status, TRANSPORT_STATUS_ACTIVE);
+        SHOULD_BE_TRUE(wickr_buffer_is_equal(test_data_1, last_rx_bob, NULL));
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, test_pkt_1);
+        
+        SHOULD_EQUAL(bob_transport->status, TRANSPORT_STATUS_ERROR);
+        SHOULD_BE_FALSE(wickr_buffer_is_equal(test_data_1, last_rx_bob, NULL));
+        
+        wickr_buffer_destroy(&test_pkt_1);
+        wickr_buffer_destroy(&test_data_1);
+    }
+    END_IT
+    
+    reset_alice_bob();
+    
+    IT("should enter a failure state if the packet type is modified in transit")
+    {
+        wickr_transport_ctx_start(alice_transport);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, alice_transport->status);
+        SHOULD_EQUAL(TRANSPORT_STATUS_ACTIVE, bob_transport->status);
+        
+        wickr_buffer_t *test_bad_packet = engine.wickr_crypto_engine_crypto_random(32);
+        
+        wickr_transport_ctx_process_tx_buffer(alice_transport, test_bad_packet);
+        
+        SHOULD_EQUAL(last_tx_alice->bytes[sizeof(uint64_t)], PAYLOAD_TYPE_CIPHERTEXT);
+        last_tx_alice->bytes[sizeof(uint64_t)] = PAYLOAD_TYPE_HANDSHAKE;
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, test_bad_packet);
+        
+        SHOULD_EQUAL(TRANSPORT_STATUS_ERROR, bob_transport->status);
+        
+        wickr_buffer_destroy(&test_bad_packet);
+    }
+    END_IT
+    
+    IT("should not allow you to send or receive packets in the error state")
+    {
+        wickr_buffer_t *test_data = engine.wickr_crypto_engine_crypto_random(32);
+
+        wickr_buffer_destroy(&last_tx_bob);
+        wickr_buffer_destroy(&last_rx_bob);
+        wickr_buffer_destroy(&last_tx_alice);
+        
+        wickr_transport_ctx_process_tx_buffer(alice_transport, test_data);
+        SHOULD_NOT_BE_NULL(last_tx_alice);
+        
+        wickr_transport_ctx_process_tx_buffer(bob_transport, test_data);
+        
+        SHOULD_EQUAL(TRANSPORT_STATUS_ERROR, bob_transport->status);
+        SHOULD_BE_NULL(last_tx_bob);
+        
+        wickr_transport_ctx_process_rx_buffer(bob_transport, last_tx_alice);
+        SHOULD_BE_NULL(last_rx_bob);
+        
+        wickr_buffer_destroy(&test_data);
+    }
+    END_IT
+    
+    
+    reset_alice_bob();
+    
     wickr_transport_ctx_destroy(&alice_transport);
     wickr_transport_ctx_destroy(&bob_transport);
-    wickr_buffer_destroy(&last_rx_alice);
-    wickr_buffer_destroy(&last_tx_alice);
-    wickr_buffer_destroy(&last_rx_bob);
-    wickr_buffer_destroy(&last_tx_bob);
     
     SHOULD_BE_NULL(alice_transport);
     SHOULD_BE_NULL(bob_transport);

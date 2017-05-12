@@ -59,6 +59,10 @@ void wickr_transport_packet_destroy(wickr_transport_packet_t **pkt);
 
 wickr_buffer_t *wickr_transport_packet_serialize(wickr_transport_packet_t *pkt);
 wickr_transport_packet_t *wickr_transport_packet_create_from_buffer(wickr_buffer_t *buffer, uint8_t signature_size);
+
+bool wickr_transport_packet_sign(wickr_transport_packet_t *pkt, const wickr_crypto_engine_t *engine, const wickr_identity_t *identity);
+bool wickr_transport_packet_verify(const wickr_transport_packet_t *packet, const wickr_buffer_t *packet_buffer, const wickr_crypto_engine_t *engine, const wickr_identity_t *identity);
+
 wickr_buffer_t *wickr_transport_packet_make_meta_buffer(wickr_transport_packet_t *pkt);
 
 

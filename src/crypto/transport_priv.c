@@ -167,3 +167,64 @@ wickr_transport_packet_t *wickr_transport_packet_create_from_buffer(wickr_buffer
     
     return pkt;
 }
+
+bool wickr_transport_packet_sign(wickr_transport_packet_t *pkt, const wickr_crypto_engine_t *engine, const wickr_identity_t *identity)
+{
+    if (!pkt || !engine || !identity) {
+        return false;
+    }
+    
+    wickr_buffer_t *data_to_sign = wickr_transport_packet_serialize(pkt);
+    
+    if (!data_to_sign) {
+        return false;
+    }
+    
+    wickr_ecdsa_result_t *signature = wickr_identity_sign(identity, engine, data_to_sign);
+    wickr_buffer_destroy(&data_to_sign);
+    
+    if (!signature) {
+        return false;
+    }
+    
+    wickr_buffer_t *signature_buffer = wickr_ecdsa_result_serialize(signature);
+    wickr_ecdsa_result_destroy(&signature);
+    
+    if (!signature_buffer) {
+        return false;
+    }
+    
+    pkt->mac = signature_buffer;
+    
+    return true;
+}
+
+bool wickr_transport_packet_verify(const wickr_transport_packet_t *packet, const wickr_buffer_t *packet_buffer, const wickr_crypto_engine_t *engine, const wickr_identity_t *identity)
+{
+    if (!packet || !packet_buffer || !packet->mac) {
+        return false;
+    }
+    
+    if (packet_buffer->length <= packet->mac->length) {
+        return false;
+    }
+    
+    wickr_ecdsa_result_t *signature = wickr_ecdsa_result_create_from_buffer(packet->mac);
+    
+    if (!signature) {
+        return false;
+    }
+    
+    /* Create a temp buffer with a length that puts it's end before the start of the mac */
+    wickr_buffer_t validation_buffer;
+    validation_buffer.bytes = packet_buffer->bytes;
+    validation_buffer.length = packet_buffer->length - packet->mac->length;
+    
+    bool return_val = engine->wickr_crypto_engine_ec_verify(signature, identity->sig_key, &validation_buffer);
+    
+    wickr_ecdsa_result_destroy(&signature);
+    
+    return return_val;
+}
+
+

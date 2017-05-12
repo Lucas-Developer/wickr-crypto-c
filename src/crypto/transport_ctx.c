@@ -26,66 +26,6 @@ static uint8_t __wickr_handshake_version_to_key_exchange(uint8_t handshake_versi
     }
 }
 
-static bool __wickr_transport_ctx_create_mac(wickr_transport_ctx_t *ctx, wickr_transport_packet_t *packet)
-{
-    if (!ctx || !packet) {
-        return false;
-    }
-    
-    wickr_buffer_t *data_to_sign = wickr_transport_packet_serialize(packet);
-    
-    if (!data_to_sign) {
-        return false;
-    }
-    
-    wickr_ecdsa_result_t *signature = wickr_identity_sign(ctx->local_identity->id_chain->node, &ctx->engine, data_to_sign);
-    wickr_buffer_destroy(&data_to_sign);
-    
-    if (!signature) {
-        return false;
-    }
-    
-    wickr_buffer_t *signature_buffer = wickr_ecdsa_result_serialize(signature);
-    wickr_ecdsa_result_destroy(&signature);
-
-    if (!signature_buffer) {
-        return false;
-    }
-    
-    packet->mac = signature_buffer;
-    
-    return true;
-}
-
-static bool __wickr_transport_ctx_verify_mac(wickr_transport_ctx_t *ctx, wickr_transport_packet_t *packet, wickr_buffer_t *packet_buffer)
-{
-    if (!ctx || !packet || !packet->mac) {
-        return false;
-    }
-    
-    if (packet_buffer->length <= packet->mac->length) {
-        return false;
-    }
-    
-    wickr_ecdsa_result_t *signature = wickr_ecdsa_result_create_from_buffer(packet->mac);
-    
-    if (!signature) {
-        return false;
-    }
-    
-    /* Create a temp buffer with a length that puts it's end before the start of the mac */
-    wickr_buffer_t validation_buffer;
-    validation_buffer.bytes = packet_buffer->bytes;
-    validation_buffer.length = packet_buffer->length - packet->mac->length;
-    
-    bool return_val = ctx->engine.wickr_crypto_engine_ec_verify(signature, ctx->remote_identity->id_chain->node->sig_key, &validation_buffer);
-    
-    wickr_ecdsa_result_destroy(&signature);
-    
-    return return_val;
-    
-}
-
 static void __wickr_transport_ctx_update_status(wickr_transport_ctx_t *ctx, wickr_transport_status status)
 {
     if (!ctx) {
@@ -220,7 +160,7 @@ static wickr_transport_packet_t *__wickr_transport_ctx_handshake_packet_create(w
         return NULL;
     }
     
-    if (!__wickr_transport_ctx_create_mac(ctx, handshake_packet)) {
+    if (!wickr_transport_packet_sign(handshake_packet, &ctx->engine, ctx->local_identity->id_chain->node)) {
         wickr_transport_packet_destroy(&handshake_packet);
         return NULL;
     }
@@ -380,12 +320,22 @@ static bool __wickr_transport_ctx_update_remote_keypair(wickr_transport_ctx_t *c
 
 static void __wickr_transport_ctx_update_tx_stream(wickr_transport_ctx_t *ctx, wickr_stream_ctx_t *tx_stream)
 {
+    /* Make sure the new stream is picking up with the sequence number of the existing stream if necessary */
+    if (ctx->tx_stream && tx_stream) {
+        tx_stream->last_seq = ctx->tx_stream->last_seq;
+    }
+    
     wickr_stream_ctx_destroy(&ctx->tx_stream);
     ctx->tx_stream = tx_stream;
 }
 
 static void __wickr_transport_ctx_update_rx_stream(wickr_transport_ctx_t *ctx, wickr_stream_ctx_t *rx_stream)
 {
+    /* Make sure the new stream is picking up with the sequence number of the existing stream if necessary */
+    if (ctx->rx_stream && rx_stream) {
+        rx_stream->last_seq = ctx->rx_stream->last_seq;
+    }
+    
     wickr_stream_ctx_destroy(&ctx->rx_stream);
     ctx->rx_stream = rx_stream;
 }
@@ -433,7 +383,14 @@ static wickr_transport_packet_t *__wickr_transport_ctx_handshake_respond(wickr_t
         return NULL;
     }
     
-    Wickr__Proto__Handshake__PayloadCase phase = ctx->status == TRANSPORT_STATUS_NONE ? WICKR__PROTO__HANDSHAKE__PAYLOAD_RESPONSE : WICKR__PROTO__HANDSHAKE__PAYLOAD_FINISH;
+    Wickr__Proto__Handshake__PayloadCase phase = WICKR__PROTO__HANDSHAKE__PAYLOAD__NOT_SET;
+    
+    if (ctx->status == TRANSPORT_STATUS_NONE || ctx->status == TRANSPORT_STATUS_ACTIVE) {
+        phase = WICKR__PROTO__HANDSHAKE__PAYLOAD_RESPONSE;
+    }
+    else {
+        phase = WICKR__PROTO__HANDSHAKE__PAYLOAD_FINISH;
+    }
     
     wickr_ec_key_t *key = NULL;
 
@@ -805,7 +762,7 @@ void wickr_transport_ctx_process_rx_buffer(wickr_transport_ctx_t *ctx, wickr_buf
         return;
     }
     
-    bool valid_mac = __wickr_transport_ctx_verify_mac(ctx, packet, buffer);
+    bool valid_mac = wickr_transport_packet_verify(packet, buffer, &ctx->engine, ctx->remote_identity->id_chain->node);
     
     /* The mac is not required in the condition that we are passed the handshake, the body type of the packet is ciphertext,
        and the cipher of the rx stream is authenticated. In this scenario we rely on the cipher level authentication instead of an explicit mac
@@ -818,6 +775,12 @@ void wickr_transport_ctx_process_rx_buffer(wickr_transport_ctx_t *ctx, wickr_buf
     }
     
     if (!valid_mac) {
+        __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
+        return;
+    }
+    
+    /* Make sure the sequence number is always moving forward */
+    if (ctx->rx_stream && packet->seq_num <= ctx->rx_stream->last_seq) {
         __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
         return;
     }
