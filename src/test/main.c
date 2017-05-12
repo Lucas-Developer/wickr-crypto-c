@@ -12,6 +12,7 @@
 #include "test_node.h"
 #include "test_buffer.h"
 #include "test_stream_cipher.h"
+#include "test_transport.h"
 
 #include "cspec_output_unit.h"
 
@@ -65,8 +66,10 @@ int main(int argc, char *argv[])
     CSpec_Run(DESCRIPTION(wickr_stream_key), output);
     CSpec_Run(DESCRIPTION(wickr_stream_cipher), output);
     CSpec_Run(DESCRIPTION(wickr_stream_iv), output);
+    CSpec_Run(DESCRIPTION(wickr_transport_ctx), output);
     CSpec_Run(DESCRIPTION(wickr_perform_kdf), output);
     CSpec_Run(DESCRIPTION(wickr_crypto_engine_kdf), output);
+     
     
     return output->failed;
 }
