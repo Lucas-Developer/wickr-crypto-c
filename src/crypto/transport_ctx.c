@@ -199,7 +199,6 @@ static wickr_transport_packet_t *__wickr_transport_ctx_handshake_generate_tx_key
     
     Wickr__Proto__Handshake__Response response = WICKR__PROTO__HANDSHAKE__RESPONSE__INIT;
     response.key_exchange = &key_exchange_p;
-    response.drop = false;
     
     Wickr__Proto__Handshake__Seed seed = WICKR__PROTO__HANDSHAKE__SEED__INIT;
     

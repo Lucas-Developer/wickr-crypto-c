@@ -14,13 +14,11 @@ message Handshake {
     }
 
     message Response {
-        required bool drop = 1;
         optional KeyExchange key_exchange = 2;
         optional Seed response_key = 3;
     }
 
     message Finish {
-        required bool drop = 1;
         optional KeyExchange key_exchange = 2;
     }
 

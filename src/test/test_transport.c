@@ -453,7 +453,6 @@ DESCRIBE(wickr_transport_ctx, "wickr_transport_ctx")
         
         Wickr__Proto__Handshake__Response response = WICKR__PROTO__HANDSHAKE__RESPONSE__INIT;
         response.key_exchange = &key_exchange_p;
-        response.drop = false;
         
         Wickr__Proto__Handshake return_handshake = WICKR__PROTO__HANDSHAKE__INIT;
         return_handshake.payload_case = WICKR_HANDSHAKE_PHASE_RESPONSE;

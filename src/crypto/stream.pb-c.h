@@ -61,24 +61,22 @@ struct  _Wickr__Proto__Handshake__KeyExchange
 struct  _Wickr__Proto__Handshake__Response
 {
   ProtobufCMessage base;
-  protobuf_c_boolean drop;
   Wickr__Proto__Handshake__KeyExchange *key_exchange;
   Wickr__Proto__Handshake__Seed *response_key;
 };
 #define WICKR__PROTO__HANDSHAKE__RESPONSE__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&wickr__proto__handshake__response__descriptor) \
-    , 0, NULL, NULL }
+    , NULL, NULL }
 
 
 struct  _Wickr__Proto__Handshake__Finish
 {
   ProtobufCMessage base;
-  protobuf_c_boolean drop;
   Wickr__Proto__Handshake__KeyExchange *key_exchange;
 };
 #define WICKR__PROTO__HANDSHAKE__FINISH__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&wickr__proto__handshake__finish__descriptor) \
-    , 0, NULL }
+    , NULL }
 
 
 typedef enum {
