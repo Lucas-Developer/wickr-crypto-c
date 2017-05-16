@@ -37,9 +37,9 @@ typedef enum {
 } wickr_transport_status;
 
 /* Function callback to handle sending / receiving / errors via an actual transport, eg socket */
-typedef bool(*wickr_transport_tx_func)(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data);
-typedef bool (*wickr_transport_rx_func)(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data);
-typedef void (*wickr_transport_state_change_func)(const wickr_transport_ctx_t *ctx, wickr_transport_status status);
+typedef void (*wickr_transport_tx_func)(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data, void *user);
+typedef void (*wickr_transport_rx_func)(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data, void *user);
+typedef void (*wickr_transport_state_change_func)(const wickr_transport_ctx_t *ctx, wickr_transport_status status, void *user);
 
 struct wickr_transport_callbacks {
     wickr_transport_tx_func tx;
@@ -53,7 +53,8 @@ wickr_transport_ctx_t *wickr_transport_ctx_create(const wickr_crypto_engine_t en
                                                   wickr_node_t *local_identity,
                                                   wickr_node_t *remote_identity,
                                                   uint32_t evo_count,
-                                                  wickr_transport_callbacks_t callbacks);
+                                                  wickr_transport_callbacks_t callbacks,
+                                                  void *user);
 
 wickr_transport_ctx_t *wickr_transport_ctx_copy(const wickr_transport_ctx_t *stream);
 void wickr_transport_ctx_destroy(wickr_transport_ctx_t **ctx);

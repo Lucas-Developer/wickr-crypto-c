@@ -33,10 +33,10 @@ static void __wickr_transport_ctx_update_status(wickr_transport_ctx_t *ctx, wick
     }
     
     ctx->status = status;
-    ctx->callbacks.on_state(ctx, status);
+    ctx->callbacks.on_state(ctx, status, ctx->user);
 }
 
-wickr_transport_ctx_t *wickr_transport_ctx_create(const wickr_crypto_engine_t engine, wickr_node_t *local_identity, wickr_node_t *remote_identity, uint32_t evo_count, wickr_transport_callbacks_t callbacks)
+wickr_transport_ctx_t *wickr_transport_ctx_create(const wickr_crypto_engine_t engine, wickr_node_t *local_identity, wickr_node_t *remote_identity, uint32_t evo_count, wickr_transport_callbacks_t callbacks, void *user)
 {
     if (!local_identity || !remote_identity) {
         return NULL;
@@ -58,6 +58,8 @@ wickr_transport_ctx_t *wickr_transport_ctx_create(const wickr_crypto_engine_t en
     ctx->remote_identity = remote_identity;
     ctx->callbacks = callbacks;
     ctx->evo_count = evo_count == 0 ? PACKET_PER_EVO_DEFAULT : evo_count;
+    ctx->user = user;
+    
     return ctx;
 }
 
@@ -115,6 +117,7 @@ wickr_transport_ctx_t *wickr_transport_ctx_copy(const wickr_transport_ctx_t *ctx
     copy->status = ctx->status;
     copy->callbacks = ctx->callbacks;
     copy->evo_count = ctx->evo_count;
+    copy->user = ctx->user;
     
     return copy;
 }
@@ -650,7 +653,7 @@ void wickr_transport_ctx_start(wickr_transport_ctx_t *ctx)
     
     __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_SEEDED);
     
-    ctx->callbacks.tx(ctx, serialized_packet);
+    ctx->callbacks.tx(ctx, serialized_packet, ctx->user);
 }
 
 void wickr_transport_ctx_process_tx_buffer(wickr_transport_ctx_t *ctx, const wickr_buffer_t *buffer)
@@ -680,7 +683,7 @@ void wickr_transport_ctx_process_tx_buffer(wickr_transport_ctx_t *ctx, const wic
         return;
     }
     
-    ctx->callbacks.tx(ctx, out_buffer);
+    ctx->callbacks.tx(ctx, out_buffer, ctx->user);
 }
 
 void wickr_transport_ctx_process_rx_buffer(wickr_transport_ctx_t *ctx, const wickr_buffer_t *buffer)
@@ -795,11 +798,11 @@ void wickr_transport_ctx_process_rx_buffer(wickr_transport_ctx_t *ctx, const wic
             __wickr_transport_ctx_update_status(ctx, TRANSPORT_STATUS_ERROR);
             return;
         }
-        ctx->callbacks.tx(ctx, packet_buffer);
+        ctx->callbacks.tx(ctx, packet_buffer, ctx->user);
     }
     
     if (return_buffer) {
-        ctx->callbacks.rx(ctx, return_buffer);
+        ctx->callbacks.rx(ctx, return_buffer, ctx->user);
     }
     
 }

@@ -12,76 +12,83 @@ wickr_transport_ctx_t *bob_transport = NULL;
 /* Static helper variables */
 
 /* Alice */
+const char *test_alice_user_data = "ALICE";
 static wickr_buffer_t *last_tx_alice = NULL;
 static wickr_buffer_t *last_rx_alice = NULL;
 static wickr_transport_status last_status_alice = TRANSPORT_STATUS_NONE;
 
 /* Bob */
+const char *test_bob_user_data = "BOB";
 static wickr_buffer_t *last_tx_bob = NULL;
 static wickr_buffer_t *last_rx_bob = NULL;
 static wickr_transport_status last_status_bob = TRANSPORT_STATUS_NONE;
 
 /* Test Callbacks for Alice */
-bool wickr_test_transport_tx_alice(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data)
+void wickr_test_transport_tx_alice(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data, void *user)
 {
     wickr_buffer_destroy(&last_tx_alice);
     last_tx_alice = (wickr_buffer_t *)data;
+    
+    SHOULD_EQUAL(test_alice_user_data, (const char *)user);
     
     wickr_transport_ctx_process_rx_buffer(bob_transport, data);
-    
-    return true;
 }
 
-bool wickr_test_transport_tx_alice_no_send(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data)
+void wickr_test_transport_tx_alice_no_send(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data, void *user)
 {
     wickr_buffer_destroy(&last_tx_alice);
     last_tx_alice = (wickr_buffer_t *)data;
-    return true;
+    
+    SHOULD_EQUAL(test_alice_user_data, (const char *)user);
 }
 
-bool wickr_test_transport_rx_alice(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data)
+void wickr_test_transport_rx_alice(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data, void *user)
 {
     wickr_buffer_destroy(&last_rx_alice);
     last_rx_alice = (wickr_buffer_t *)data;
     
-    return true;
+    SHOULD_EQUAL(test_alice_user_data, (const char *)user);
 }
 
-void wickr_test_transport_status_alice(const wickr_transport_ctx_t *ctx, wickr_transport_status status)
+void wickr_test_transport_status_alice(const wickr_transport_ctx_t *ctx, wickr_transport_status status, void *user)
 {
     last_status_alice = status;
+    
+    SHOULD_EQUAL(test_alice_user_data, (const char *)user);
 }
 
 /* Test callbacks for Bob */
-bool wickr_test_transport_tx_bob(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data)
+void wickr_test_transport_tx_bob(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data, void *user)
 {
     wickr_buffer_destroy(&last_tx_bob);
     last_tx_bob = (wickr_buffer_t *)data;
     
     wickr_transport_ctx_process_rx_buffer(alice_transport, data);
     
-    return true;
+    SHOULD_EQUAL(test_bob_user_data, (const char *)user);
 }
 
-bool wickr_test_transport_tx_bob_no_send(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data)
+void wickr_test_transport_tx_bob_no_send(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data, void *user)
 {
     wickr_buffer_destroy(&last_tx_bob);
     last_tx_bob = (wickr_buffer_t *)data;
     
-    return true;
+    SHOULD_EQUAL(test_bob_user_data, (const char *)user);
 }
 
-bool wickr_test_transport_rx_bob(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data)
+void wickr_test_transport_rx_bob(const wickr_transport_ctx_t *ctx, const wickr_buffer_t *data, void *user)
 {
     wickr_buffer_destroy(&last_rx_bob);
     last_rx_bob = (wickr_buffer_t *)data;
     
-    return true;
+    SHOULD_EQUAL(test_bob_user_data, (const char *)user);
 }
 
-void wickr_test_transport_status_bob(const wickr_transport_ctx_t *ctx, wickr_transport_status status)
+void wickr_test_transport_status_bob(const wickr_transport_ctx_t *ctx, wickr_transport_status status, void *user)
 {
     last_status_bob = status;
+    
+    SHOULD_EQUAL(test_bob_user_data, (const char *)user);
 }
 
 static wickr_transport_callbacks_t test_callbacks_alice = { wickr_test_transport_tx_alice,
@@ -136,8 +143,8 @@ void reset_alice_bob()
     wickr_transport_ctx_destroy(&alice_transport);
     wickr_transport_ctx_destroy(&bob_transport);
     
-    SHOULD_BE_TRUE(alice_transport = wickr_transport_ctx_create(default_engine, alice_node_1, bob_node_1, 0, test_callbacks_alice));
-    SHOULD_BE_TRUE(bob_transport = wickr_transport_ctx_create(default_engine, bob_node_2, alice_node_2, 0, test_callbacks_bob));
+    SHOULD_BE_TRUE(alice_transport = wickr_transport_ctx_create(default_engine, alice_node_1, bob_node_1, 0, test_callbacks_alice, (void *)test_alice_user_data));
+    SHOULD_BE_TRUE(bob_transport = wickr_transport_ctx_create(default_engine, bob_node_2, alice_node_2, 0, test_callbacks_bob, (void *)test_bob_user_data));
     
     last_status_bob = TRANSPORT_STATUS_NONE;
     last_status_alice = TRANSPORT_STATUS_NONE;
@@ -164,14 +171,14 @@ DESCRIBE(wickr_transport_ctx, "wickr_transport_ctx")
     IT("can be initialized for both parties")
     {
         
-        SHOULD_BE_NULL(wickr_transport_ctx_create(default_engine, NULL, NULL,0, test_callbacks_alice));
-        SHOULD_BE_NULL(wickr_transport_ctx_create(default_engine, alice_node_1, NULL, 0, test_callbacks_alice));
-        SHOULD_BE_NULL(wickr_transport_ctx_create(default_engine, NULL, alice_node_1, 0, test_callbacks_alice));
-        SHOULD_BE_NULL(wickr_transport_ctx_create(default_engine, alice_node_1, bob_node_1, PACKET_PER_EVO_MIN - 1, test_callbacks_alice));
-        SHOULD_BE_NULL(wickr_transport_ctx_create(default_engine, alice_node_1, bob_node_1, PACKET_PER_EVO_MAX + 1, test_callbacks_alice));
+        SHOULD_BE_NULL(wickr_transport_ctx_create(default_engine, NULL, NULL,0, test_callbacks_alice, NULL));
+        SHOULD_BE_NULL(wickr_transport_ctx_create(default_engine, alice_node_1, NULL, 0, test_callbacks_alice, NULL));
+        SHOULD_BE_NULL(wickr_transport_ctx_create(default_engine, NULL, alice_node_1, 0, test_callbacks_alice, NULL));
+        SHOULD_BE_NULL(wickr_transport_ctx_create(default_engine, alice_node_1, bob_node_1, PACKET_PER_EVO_MIN - 1, test_callbacks_alice, NULL));
+        SHOULD_BE_NULL(wickr_transport_ctx_create(default_engine, alice_node_1, bob_node_1, PACKET_PER_EVO_MAX + 1, test_callbacks_alice, NULL));
 
-        SHOULD_BE_TRUE(alice_transport = wickr_transport_ctx_create(default_engine, alice_node_1, bob_node_1, 0, test_callbacks_alice));
-        SHOULD_BE_TRUE(bob_transport = wickr_transport_ctx_create(default_engine, bob_node_2, alice_node_2, 0, test_callbacks_bob));
+        SHOULD_BE_TRUE(alice_transport = wickr_transport_ctx_create(default_engine, alice_node_1, bob_node_1, 0, test_callbacks_alice, (void *)test_alice_user_data));
+        SHOULD_BE_TRUE(bob_transport = wickr_transport_ctx_create(default_engine, bob_node_2, alice_node_2, 0, test_callbacks_bob, (void *)test_bob_user_data));
         
         SHOULD_EQUAL(last_status_alice, TRANSPORT_STATUS_NONE);
         SHOULD_EQUAL(last_status_bob, TRANSPORT_STATUS_NONE);
